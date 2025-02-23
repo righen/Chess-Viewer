@@ -93,16 +93,16 @@ const formatMoves = (moves: string[]): React.ReactElement => {
 };
 
 // Add a check for browser environment
-const hardwareConcurrency = typeof navigator !== 'undefined' ? navigator.hardwareConcurrency || 1 : 1;
+const hardwareConcurrency = typeof window !== 'undefined' ? navigator.hardwareConcurrency || 1 : 1;
 
 export default function StockfishTest() {
   const [engineStatus, setEngineStatus] = useState<string>('Not initialized');
   const [config, setConfig] = useState<EngineConfig>({
-    threads: 1,
-    hash: 128,
+    threads: typeof window !== 'undefined' ? navigator.hardwareConcurrency || 1 : 1,
+    hash: 1024,
     wasmSupported: false,
     multiPV: 3,
-    depth: 20,
+    depth: 40,
     skillLevel: 20,
     contempt: 0
   });
@@ -462,6 +462,40 @@ export default function StockfishTest() {
             ))}
           </div>
         )}
+
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center justify-between">
+            <h3 className="font-bold text-white text-lg">Engine Analysis</h3>
+            <div className="flex items-center gap-4 text-sm">
+              <span title="CPU Threads" className="flex items-center gap-1">
+                <span>🧠</span>
+                <span className="font-mono text-blue-300">{typeof window !== 'undefined' ? navigator.hardwareConcurrency || 1 : 1} cores</span>
+              </span>
+              <span title="Hash Table Size" className="flex items-center gap-1">
+                <span>💾</span>
+                <span className="font-mono text-blue-300">1024MB</span>
+              </span>
+              {analysisInfo.depth && (
+                <span title="Search Depth" className="flex items-center gap-1">
+                  <span>🔍</span>
+                  <span className="font-mono text-blue-300">depth {analysisInfo.depth}</span>
+                </span>
+              )}
+              {analysisInfo.nodes && (
+                <span title="Nodes Searched" className="flex items-center gap-1">
+                  <span>🌳</span>
+                  <span className="font-mono text-blue-300">{formatNumber(analysisInfo.nodes)} nodes</span>
+                </span>
+              )}
+              {analysisInfo.nps && (
+                <span title="Speed" className="flex items-center gap-1">
+                  <span>⚡</span>
+                  <span className="font-mono text-blue-300">{formatNumber(analysisInfo.nps)}/s</span>
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );

@@ -52,6 +52,7 @@ const ChessViewer = forwardRef<ChessViewerHandle, ChessViewerProps>((props, ref)
   });
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysis, setAnalysis] = useState<AnalysisMove[]>([]);
+  const [analysisInfo, setAnalysisInfo] = useState({ depth: 0, nodes: 0, nps: 0 });
   const engineRef = useRef<Worker | null>(null);
 
   const currentGame = games[currentGameIndex];
@@ -111,18 +112,23 @@ const ChessViewer = forwardRef<ChessViewerHandle, ChessViewerProps>((props, ref)
           const message = e.data;
           if (typeof message !== 'string') return;
 
-          if (message.startsWith('info depth')) {
-            // Only process deep enough analysis
-            if (!message.includes('depth 15')) return;
-
-            const moveMatch = message.match(/pv ([a-h][1-8][a-h][1-8][qrbn]?\s*)+/);
-            const scoreMatch = message.match(/score (cp|mate) (-?\d+)/);
+          if (message.startsWith('info')) {
             const depthMatch = message.match(/depth (\d+)/);
             const nodesMatch = message.match(/nodes (\d+)/);
             const npsMatch = message.match(/nps (\d+)/);
-            const tbhitsMatch = message.match(/tbhits (\d+)/);
+            const scoreMatch = message.match(/score (cp|mate) (-?\d+)/);
             const multipvMatch = message.match(/multipv (\d+)/);
+            const moveMatch = message.match(/pv ([a-h][1-8][a-h][1-8][qrbn]?\s*)+/);
             
+            // Update analysis info for real-time stats
+            setAnalysisInfo(prev => ({
+              ...prev,
+              depth: depthMatch ? parseInt(depthMatch[1]) : prev.depth,
+              nodes: nodesMatch ? parseInt(nodesMatch[1]) : prev.nodes,
+              nps: npsMatch ? parseInt(npsMatch[1]) : prev.nps
+            }));
+
+            // Process analysis info immediately
             if (moveMatch && scoreMatch && multipvMatch) {
               const moves = moveMatch[0].split(' ').slice(1); // Get all moves in PV
               const [, scoreType, scoreValue] = scoreMatch;
@@ -131,7 +137,7 @@ const ChessViewer = forwardRef<ChessViewerHandle, ChessViewerProps>((props, ref)
               const depth = depthMatch ? parseInt(depthMatch[1]) : 0;
               const nodes = nodesMatch ? parseInt(nodesMatch[1]) : 0;
               const nps = npsMatch ? parseInt(npsMatch[1]) : 0;
-              const tbhits = tbhitsMatch ? parseInt(tbhitsMatch[1]) : 0;
+              const tbhits = 0;
               const multipv = parseInt(multipvMatch[1]);
 
               // Convert UCI moves to SAN notation
@@ -164,14 +170,14 @@ const ChessViewer = forwardRef<ChessViewerHandle, ChessViewerProps>((props, ref)
                   const newAnalysis = [...prev];
                   // Update or add the analysis for this multipv line
                   newAnalysis[multipv - 1] = {
-                    move: sanMoves[0], // Best move for this line
+                    move: sanMoves[0],
                     score: score !== null ? score : 0,
                     mate,
                     depth,
                     nodes,
                     nps,
                     tbhits,
-                    pv: sanMoves // Store full principal variation
+                    pv: sanMoves
                   };
                   return newAnalysis;
                 });
@@ -184,7 +190,9 @@ const ChessViewer = forwardRef<ChessViewerHandle, ChessViewerProps>((props, ref)
         worker.postMessage('uci');
         worker.postMessage('setoption name MultiPV value 3'); // Request top 3 lines
         worker.postMessage('setoption name Threads value ' + (navigator.hardwareConcurrency || 1));
-        worker.postMessage('setoption name Hash value 128');
+        worker.postMessage('setoption name Hash value 1024');
+        worker.postMessage('setoption name Use NNUE value true'); // Enable NNUE evaluation
+        worker.postMessage('setoption name UCI_AnalyseMode value true'); // Enable analysis mode
         worker.postMessage('isready');
 
         console.log('Stockfish initialized with', wasmSupported ? 'WebAssembly' : 'JavaScript', 'version');
@@ -207,7 +215,7 @@ const ChessViewer = forwardRef<ChessViewerHandle, ChessViewerProps>((props, ref)
       setAnalysis([]); // Clear previous analysis
       engineRef.current.postMessage('stop');
       engineRef.current.postMessage('position fen ' + currentFen);
-      engineRef.current.postMessage('go depth 20 multipv 3');
+      engineRef.current.postMessage('go depth 40 multipv 3');
     }
   }, [isAnalyzing, chessboard]);
 
@@ -391,7 +399,7 @@ const ChessViewer = forwardRef<ChessViewerHandle, ChessViewerProps>((props, ref)
       setAnalysis([]);
       if (engineRef.current) {
         engineRef.current.postMessage('position fen ' + chessboard.fen());
-        engineRef.current.postMessage('go depth 20 multipv 3');
+        engineRef.current.postMessage('go depth 40 multipv 3');
       }
     } else {
       setIsAnalyzing(false);
@@ -417,36 +425,28 @@ const ChessViewer = forwardRef<ChessViewerHandle, ChessViewerProps>((props, ref)
           <div className="flex flex-col gap-2">
             <div className="flex items-center justify-between">
               <h3 className="font-bold text-white text-lg">Engine Analysis</h3>
-              <div className="flex items-center gap-3 text-sm">
+              <div className="flex items-center gap-4 text-sm">
                 <span title="CPU Threads" className="flex items-center gap-1">
                   <span>🧠</span>
                   <span className="font-mono text-blue-300">{navigator.hardwareConcurrency || 1} cores</span>
                 </span>
                 <span title="Hash Table Size" className="flex items-center gap-1">
                   <span>💾</span>
-                  <span className="font-mono text-blue-300">128MB</span>
+                  <span className="font-mono text-blue-300">1024MB</span>
                 </span>
-              </div>
-            </div>
-            <div className="flex items-center gap-3 text-sm text-blue-300">
-              {analysis[0]?.depth && (
                 <span title="Search Depth" className="flex items-center gap-1">
                   <span>🔍</span>
-                  <span className="font-mono">depth {analysis[0].depth}</span>
+                  <span className="font-mono text-blue-300">depth {analysisInfo.depth || 0}</span>
                 </span>
-              )}
-              {analysis[0]?.nodes && (
                 <span title="Nodes Searched" className="flex items-center gap-1">
                   <span>🌳</span>
-                  <span className="font-mono">{formatNumber(analysis[0].nodes)} nodes</span>
+                  <span className="font-mono text-blue-300">{formatNumber(analysisInfo.nodes || 0)} nodes</span>
                 </span>
-              )}
-              {analysis[0]?.nps && (
                 <span title="Speed" className="flex items-center gap-1">
                   <span>⚡</span>
-                  <span className="font-mono">{formatNumber(analysis[0].nps)}/s</span>
+                  <span className="font-mono text-blue-300">{formatNumber(analysisInfo.nps || 0)}/s</span>
                 </span>
-              )}
+              </div>
             </div>
           </div>
         </div>
