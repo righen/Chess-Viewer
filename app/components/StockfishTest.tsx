@@ -94,8 +94,6 @@ const formatMoves = (moves: string[]): React.ReactElement => {
 
 export default function StockfishTest() {
   const [engineStatus, setEngineStatus] = useState<string>('Not initialized');
-  const [engineOutput, setEngineOutput] = useState<string[]>([]);
-  const [error, setError] = useState<string | null>(null);
   const [config, setConfig] = useState<EngineConfig>({
     threads: 1,
     hash: 128,
@@ -109,9 +107,6 @@ export default function StockfishTest() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [variations, setVariations] = useState<Variation[]>([]);
   const workerRef = useRef<Worker | null>(null);
-  const [testMoveInput, setTestMoveInput] = useState<string>('');
-  const [testMoveOutput, setTestMoveOutput] = useState<string>('');
-  const [testPosition, setTestPosition] = useState<string>('');
 
   useEffect(() => {
     const initEngine = () => {
@@ -133,7 +128,6 @@ export default function StockfishTest() {
         // Set up message handler
         worker.onmessage = (e) => {
           const message = e.data;
-          setEngineOutput(prev => [...prev.slice(-29), message]);
 
           // Parse analysis info
           if (message.startsWith('info')) {
@@ -209,6 +203,9 @@ export default function StockfishTest() {
 
           if (message === 'uciok') {
             setEngineStatus('UCI initialized');
+            // Set initial options after UCI is initialized
+            worker.postMessage(`setoption name Skill Level value ${config.skillLevel}`);
+            worker.postMessage(`setoption name Contempt value ${config.contempt}`);
           } else if (message === 'readyok') {
             setEngineStatus('Engine ready');
           }
@@ -217,35 +214,15 @@ export default function StockfishTest() {
         // Set up error handler
         worker.onerror = (e) => {
           console.error('Worker error:', e);
-          setError(`Worker error: ${e.message}`);
           setEngineStatus('Error');
         };
 
-        const threads = navigator.hardwareConcurrency || 1;
-        const hash = 128;
-        const multiPV = 3;
-
-        // Update config
-        setConfig(prev => ({
-          ...prev,
-          threads,
-          hash,
-          multiPV
-        }));
-
         // Initialize UCI
         worker.postMessage('uci');
-        worker.postMessage(`setoption name Threads value ${threads}`);
-        worker.postMessage(`setoption name Hash value ${hash}`);
-        worker.postMessage(`setoption name MultiPV value ${multiPV}`);
-        worker.postMessage(`setoption name Skill Level value ${config.skillLevel}`);
-        worker.postMessage(`setoption name Contempt value ${config.contempt}`);
         worker.postMessage('isready');
 
-        setEngineStatus('Worker created');
       } catch (err) {
         console.error('Failed to initialize Stockfish:', err);
-        setError(err instanceof Error ? err.message : 'Unknown error');
         setEngineStatus('Failed');
       }
     };
@@ -258,7 +235,7 @@ export default function StockfishTest() {
         workerRef.current.terminate();
       }
     };
-  }, []);
+  }, [config.skillLevel, config.contempt]);
 
   const updateEngineOption = (option: string, value: number) => {
     if (!workerRef.current || engineStatus !== 'Engine ready') return;
@@ -269,36 +246,32 @@ export default function StockfishTest() {
   // Test functions
   const testStartPos = () => {
     if (!workerRef.current) {
-      setError('Engine not initialized');
+      console.error('Engine not initialized');
       return;
     }
 
     try {
-      setEngineOutput([]);
       setIsAnalyzing(true);
       workerRef.current.postMessage('position startpos');
       workerRef.current.postMessage(`go depth ${config.depth}`);
     } catch (err) {
       console.error('Analysis error:', err);
-      setError(err instanceof Error ? err.message : 'Analysis error');
     }
   };
 
   const testSpecificPos = () => {
     if (!workerRef.current) {
-      setError('Engine not initialized');
+      console.error('Engine not initialized');
       return;
     }
 
     try {
-      setEngineOutput([]);
       setIsAnalyzing(true);
       // Test a specific position (Sicilian Defense)
       workerRef.current.postMessage('position fen rnbqkbnr/pp1ppppp/8/2p5/4P3/8/PPPP1PPP/RNBQKBNR w KQkq c6 0 2');
       workerRef.current.postMessage(`go depth ${config.depth}`);
     } catch (err) {
       console.error('Analysis error:', err);
-      setError(err instanceof Error ? err.message : 'Analysis error');
     }
   };
 
@@ -322,18 +295,6 @@ export default function StockfishTest() {
       return (score > 0 ? '+' : '') + score.toFixed(2);
     }
     return 'N/A';
-  };
-
-  // Add new function for testing move format
-  const testMoveFormat = () => {
-    try {
-      const chess = new Chess(testPosition || undefined);
-      const formattedMove = formatUCIMove(testMoveInput, chess);
-      setTestMoveOutput(formattedMove);
-    } catch (err) {
-      console.error('Error formatting test move:', err);
-      setTestMoveOutput('Error formatting move');
-    }
   };
 
   return (

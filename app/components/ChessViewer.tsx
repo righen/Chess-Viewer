@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Chess } from 'chess.js';
 import { Chessboard } from 'react-chessboard';
 import type { Square } from 'chess.js';
@@ -26,7 +26,6 @@ export default function ChessViewer() {
   const [currentGameIndex, setCurrentGameIndex] = useState(0);
   const [currentMoveIndex, setCurrentMoveIndex] = useState(-1);
   const [chessboard, setChessboard] = useState(new Chess());
-  const [currentGameMoves, setCurrentGameMoves] = useState<string[]>([]);
   const [boardWidth, setBoardWidth] = useState(400);
   const [boardOrientation, setBoardOrientation] = useState<'white' | 'black'>('white');
   const [searchQuery, setSearchQuery] = useState('');
@@ -45,6 +44,26 @@ export default function ChessViewer() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysis, setAnalysis] = useState<AnalysisMove[]>([]);
   const engineRef = useRef<Worker | null>(null);
+
+  const currentGame = games[currentGameIndex];
+  const whitePlayer = currentGame?.headers['White'] || 'White';
+  const blackPlayer = currentGame?.headers['Black'] || 'Black';
+  const result = currentGame?.headers['Result'] || '';
+
+  const goToMove = useCallback((moveIndex: number) => {
+    if (moveIndex < 0 || moveIndex >= currentGame?.moves.length) return;
+    
+    const newChess = new Chess();
+    if (currentGame) {
+      // Apply moves up to the selected index
+      for (let i = 0; i <= moveIndex; i++) {
+        newChess.move(currentGame.moves[i]);
+      }
+      
+      setChessboard(newChess);
+      setCurrentMoveIndex(moveIndex);
+    }
+  }, [currentGame]);
 
   useEffect(() => {
     const updateDimensions = () => {
@@ -96,7 +115,7 @@ export default function ChessViewer() {
             
             if (moveMatch && scoreMatch) {
               const moves = moveMatch[0].split(' ').slice(1, 4); // Get first 3 moves
-              const [_, scoreType, scoreValue] = scoreMatch;
+              const [, scoreType, scoreValue] = scoreMatch;
               const score = scoreType === 'cp' ? parseInt(scoreValue) / 100 : null;
               const mate = scoreType === 'mate' ? parseInt(scoreValue) : undefined;
               const depth = depthMatch ? parseInt(depthMatch[1]) : 0;
@@ -104,7 +123,7 @@ export default function ChessViewer() {
               const nps = npsMatch ? parseInt(npsMatch[1]) : 0;
               const tbhits = tbhitsMatch ? parseInt(tbhitsMatch[1]) : 0;
               
-              setAnalysis(prev => {
+              setAnalysis(() => {
                 const newAnalysis = moves.map((move, i) => ({
                   move,
                   score: score !== null ? score - i * 0.1 : 0,
@@ -143,13 +162,14 @@ export default function ChessViewer() {
   }, []);
 
   useEffect(() => {
+    const currentFen = chessboard.fen();
     if (isAnalyzing && engineRef.current) {
       setAnalysis([]); // Clear previous analysis
       engineRef.current.postMessage('stop');
-      engineRef.current.postMessage('position fen ' + chessboard.fen());
+      engineRef.current.postMessage('position fen ' + currentFen);
       engineRef.current.postMessage('go depth 20 multipv 3');
     }
-  }, [chessboard.fen(), isAnalyzing]);
+  }, [isAnalyzing, chessboard]);
 
   const loadPGN = (pgnText: string) => {
     try {
@@ -225,44 +245,9 @@ export default function ChessViewer() {
       setCurrentGameIndex(gameIndex);
       setCurrentMoveIndex(-1);
       setChessboard(chess);
-      setCurrentGameMoves(game.moves);
     } catch (error) {
       console.error('Failed to load game:', error);
     }
-  };
-
-  const goToMove = (moveIndex: number) => {
-    if (!currentGameMoves.length) return;
-    
-    try {
-      const chess = new Chess();
-      
-      if (moveIndex >= -1 && moveIndex < currentGameMoves.length) {
-        // Apply moves up to the selected index
-        for (let i = 0; i <= moveIndex; i++) {
-          chess.move(currentGameMoves[i]);
-        }
-        
-        setCurrentMoveIndex(moveIndex);
-        setChessboard(chess);
-      }
-    } catch (error) {
-      console.error('Failed to apply move:', error);
-    }
-  };
-
-  const switchGame = (direction: 'next' | 'prev') => {
-    if (games.length === 0) return;
-
-    const newIndex = direction === 'next'
-      ? (currentGameIndex + 1) % games.length
-      : (currentGameIndex - 1 + games.length) % games.length;
-
-    setCurrentGameIndex(newIndex);
-    setCurrentMoveIndex(-1);
-    
-    const chess = new Chess();
-    setChessboard(chess);
   };
 
   const getPairedMoves = (moves: string[]) => {
@@ -290,32 +275,28 @@ export default function ChessViewer() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [currentMoveIndex, currentGameIndex, games]);
+  }, [currentMoveIndex, currentGameIndex, games, goToMove]);
 
   const flipBoard = () => {
     setBoardOrientation(prev => prev === 'white' ? 'black' : 'white');
   };
 
-  const currentGame = games[currentGameIndex];
-  const whitePlayer = currentGame?.headers['White'] || 'White';
-  const blackPlayer = currentGame?.headers['Black'] || 'Black';
-  const result = currentGame?.headers['Result'] || '';
-
   const onPieceDrop = (sourceSquare: Square, targetSquare: Square) => {
     try {
-      if (games.length > 0) return false;
-
+      if (games.length > 0) return false; // Prevent moves when viewing games
+      
       const move = chessboard.move({
         from: sourceSquare,
         to: targetSquare,
-        promotion: 'q',
+        promotion: 'q'
       });
 
       if (move === null) return false;
+
       setChessboard(new Chess(chessboard.fen()));
       return true;
     } catch (error) {
-      console.error('Failed to make move:', error);
+      console.error('Failed to apply move:', error);
       return false;
     }
   };
@@ -601,7 +582,7 @@ export default function ChessViewer() {
                       </p>
                     ) : (
                       <p>
-                        <span className="font-bold">{chessboard.turn() === 'w' ? "White" : "Black"}'s turn</span>
+                        <span className="font-bold">{chessboard.turn() === 'w' ? "White" : "Black"}&apos;s turn</span>
                         {chessboard.isCheck() ? " (Check!)" : ""}
                       </p>
                     )}
