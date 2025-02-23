@@ -92,6 +92,9 @@ const formatMoves = (moves: string[]): React.ReactElement => {
   }
 };
 
+// Add a check for browser environment
+const hardwareConcurrency = typeof navigator !== 'undefined' ? navigator.hardwareConcurrency || 1 : 1;
+
 export default function StockfishTest() {
   const [engineStatus, setEngineStatus] = useState<string>('Not initialized');
   const [config, setConfig] = useState<EngineConfig>({
@@ -227,7 +230,10 @@ export default function StockfishTest() {
       }
     };
 
-    initEngine();
+    // Only initialize in browser environment
+    if (typeof window !== 'undefined') {
+      initEngine();
+    }
 
     return () => {
       if (workerRef.current) {
@@ -299,12 +305,12 @@ export default function StockfishTest() {
 
   return (
     <div className="p-8 max-w-4xl mx-auto">
-      <div className="bg-gray-900 rounded-lg shadow-lg p-6">
+      <div className="bg-gray-800 rounded-lg shadow-lg shadow-black/20 p-6">
         {/* Engine Info Section */}
-        <div className="p-4 bg-gray-800 rounded-lg mb-4">
+        <div className="p-4 bg-gray-700/50 rounded-lg mb-4">
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <h3 className="text-gray-300 font-bold mb-2">Engine Parameters</h3>
+              <h3 className="text-gray-200 font-bold mb-2">Engine Parameters</h3>
               <div className="space-y-2">
                 <div className="flex items-center gap-2">
                   <span className="text-gray-400">Threads:</span>
@@ -312,9 +318,9 @@ export default function StockfishTest() {
                     type="number"
                     value={config.threads}
                     onChange={(e) => updateEngineOption('Threads', parseInt(e.target.value))}
-                    className="bg-gray-700 text-gray-300 px-2 py-1 rounded w-20"
+                    className="bg-gray-700 text-gray-200 px-2 py-1 rounded w-20 border border-gray-600 focus:outline-none focus:ring-1 focus:ring-blue-500"
                     min="1"
-                    max={navigator.hardwareConcurrency || 8}
+                    max={hardwareConcurrency}
                   />
                 </div>
                 <div className="flex items-center gap-2">
@@ -323,7 +329,7 @@ export default function StockfishTest() {
                     type="number"
                     value={config.hash}
                     onChange={(e) => updateEngineOption('Hash', parseInt(e.target.value))}
-                    className="bg-gray-700 text-gray-300 px-2 py-1 rounded w-20"
+                    className="bg-gray-700 text-gray-200 px-2 py-1 rounded w-20 border border-gray-600 focus:outline-none focus:ring-1 focus:ring-blue-500"
                     min="16"
                     max="1024"
                     step="16"
@@ -336,7 +342,7 @@ export default function StockfishTest() {
                     type="number"
                     value={config.multiPV}
                     onChange={(e) => updateEngineOption('MultiPV', parseInt(e.target.value))}
-                    className="bg-gray-700 text-gray-300 px-2 py-1 rounded w-20"
+                    className="bg-gray-700 text-gray-200 px-2 py-1 rounded w-20 border border-gray-600 focus:outline-none focus:ring-1 focus:ring-blue-500"
                     min="1"
                     max="10"
                   />
@@ -347,7 +353,7 @@ export default function StockfishTest() {
                     type="number"
                     value={config.depth}
                     onChange={(e) => updateEngineOption('Depth', parseInt(e.target.value))}
-                    className="bg-gray-700 text-gray-300 px-2 py-1 rounded w-20"
+                    className="bg-gray-700 text-gray-200 px-2 py-1 rounded w-20 border border-gray-600 focus:outline-none focus:ring-1 focus:ring-blue-500"
                     min="1"
                     max="30"
                   />
@@ -358,7 +364,7 @@ export default function StockfishTest() {
                     type="number"
                     value={config.skillLevel}
                     onChange={(e) => updateEngineOption('Skill Level', parseInt(e.target.value))}
-                    className="bg-gray-700 text-gray-300 px-2 py-1 rounded w-20"
+                    className="bg-gray-700 text-gray-200 px-2 py-1 rounded w-20 border border-gray-600 focus:outline-none focus:ring-1 focus:ring-blue-500"
                     min="0"
                     max="20"
                   />
@@ -369,7 +375,7 @@ export default function StockfishTest() {
                     type="number"
                     value={config.contempt}
                     onChange={(e) => updateEngineOption('Contempt', parseInt(e.target.value))}
-                    className="bg-gray-700 text-gray-300 px-2 py-1 rounded w-20"
+                    className="bg-gray-700 text-gray-200 px-2 py-1 rounded w-20 border border-gray-600 focus:outline-none focus:ring-1 focus:ring-blue-500"
                     min="-100"
                     max="100"
                   />
@@ -377,36 +383,36 @@ export default function StockfishTest() {
               </div>
             </div>
             <div>
-              <h3 className="text-gray-300 font-bold mb-2">Engine Status</h3>
+              <h3 className="text-gray-200 font-bold mb-2">Engine Status</h3>
               <div className="space-y-2">
                 <div className="flex items-center gap-2">
                   <span className="text-gray-400">Status:</span>
-                  <span className="text-gray-300">{engineStatus}</span>
+                  <span className="text-gray-200">{engineStatus}</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="text-gray-400">Running:</span>
-                  <span className={`text-gray-300 ${isAnalyzing ? 'text-green-400' : 'text-red-400'}`}>
+                  <span className={`${isAnalyzing ? 'text-green-400' : 'text-red-400'}`}>
                     {isAnalyzing ? 'Yes' : 'No'}
                   </span>
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="text-gray-400">Current Depth:</span>
-                  <span className="text-gray-300">{analysisInfo.depth || 0}</span>
+                  <span className="text-gray-200">{analysisInfo.depth || 0}</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="text-gray-400">WASM:</span>
-                  <span className="text-gray-300">{config.wasmSupported ? 'Supported' : 'Not Supported'}</span>
+                  <span className="text-gray-200">{config.wasmSupported ? 'Supported' : 'Not Supported'}</span>
                 </div>
                 {analysisInfo.nodes && (
                   <div className="flex items-center gap-2">
                     <span className="text-gray-400">Nodes:</span>
-                    <span className="text-gray-300">{formatNumber(analysisInfo.nodes)}</span>
+                    <span className="text-gray-200">{formatNumber(analysisInfo.nodes)}</span>
                   </div>
                 )}
                 {analysisInfo.nps && (
                   <div className="flex items-center gap-2">
                     <span className="text-gray-400">Speed:</span>
-                    <span className="text-gray-300">{formatNumber(analysisInfo.nps)}/s</span>
+                    <span className="text-gray-200">{formatNumber(analysisInfo.nps)}/s</span>
                   </div>
                 )}
               </div>
@@ -417,32 +423,38 @@ export default function StockfishTest() {
         <div className="flex flex-col gap-2">
           <button
             onClick={testStartPos}
-            className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+            className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 transition-colors"
           >
             Test Start Position
           </button>
           <button
             onClick={testSpecificPos}
-            className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+            className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 transition-colors"
           >
             Test Sicilian Position
           </button>
           <button
             onClick={stopAnalysis}
-            className="bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600"
+            className="bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600 transition-colors"
           >
             Stop Analysis
           </button>
         </div>
 
         {variations.length > 0 && (
-          <div className="space-y-1 mt-4">
+          <div className="space-y-1 mt-4 bg-gray-700/50 rounded-lg p-4">
             {variations.map((variation, index) => (
               <div 
                 key={index}
                 className="text-gray-300 flex items-start gap-4 font-mono"
               >
-                <span className="w-16 flex-shrink-0">
+                <span className={`w-16 flex-shrink-0 font-bold ${
+                  variation.score !== undefined ? (
+                    variation.score > 0 ? 'text-green-400' : 
+                    variation.score < 0 ? 'text-red-400' : 
+                    'text-gray-400'
+                  ) : 'text-gray-400'
+                }`}>
                   {formatScore(variation.score, variation.mate)}
                 </span>
                 {formatMoves(variation.moves)}
