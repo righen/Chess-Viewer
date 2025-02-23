@@ -25,10 +25,20 @@ export default function Home() {
     }
   }, []);
 
+  const handlePasteFEN = useCallback(() => {
+    console.log('Paste FEN triggered'); // Debug log
+    if (viewer.current) {
+      viewer.current.handlePasteFEN();
+    } else {
+      console.error('ChessViewer ref not available');
+    }
+  }, []);
+
   return (
     <Layout 
       onFileUpload={handleFileUpload}
       onPastePGN={handlePaste}
+      onPasteFEN={handlePasteFEN}
     >
       <ChessViewer ref={viewer} />
     </Layout>

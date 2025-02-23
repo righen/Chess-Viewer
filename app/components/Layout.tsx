@@ -5,9 +5,10 @@ interface LayoutProps {
   children: React.ReactNode;
   onFileUpload?: (file: File) => void;
   onPastePGN?: () => void;
+  onPasteFEN?: () => void;
 }
 
-export default function Layout({ children, onFileUpload, onPastePGN }: LayoutProps) {
+export default function Layout({ children, onFileUpload, onPastePGN, onPasteFEN }: LayoutProps) {
   const [isSidebarExpanded, setIsSidebarExpanded] = useState(false);
   const [showFileMenu, setShowFileMenu] = useState(false);
   const [showEditMenu, setShowEditMenu] = useState(false);
@@ -124,6 +125,17 @@ export default function Layout({ children, onFileUpload, onPastePGN }: LayoutPro
               >
                 <span>📋</span> Paste PGN
               </button>
+              <button 
+                onClick={async () => {
+                  if (onPasteFEN) {
+                    onPasteFEN();
+                    handleMenuMouseLeave();
+                  }
+                }}
+                className="w-full px-4 py-2 text-left hover:bg-[#383852] flex items-center gap-2"
+              >
+                <span>♟</span> Paste FEN
+              </button>
             </div>
           )}
         </div>
@@ -207,6 +219,9 @@ export default function Layout({ children, onFileUpload, onPastePGN }: LayoutPro
                     <div className="px-4 py-1 text-sm text-gray-300 hover:bg-[#383852] rounded">Play vs Computer</div>
                     <div className="px-4 py-1 text-sm text-gray-300 hover:bg-[#383852] rounded">Analysis Board</div>
                     <div className="px-4 py-1 text-sm text-gray-300 hover:bg-[#383852] rounded">Import Game</div>
+                    <Link href="/stockfish">
+                      <div className="px-4 py-1 text-sm text-gray-300 hover:bg-[#383852] rounded">Stockfish Tester</div>
+                    </Link>
                   </div>
                 )}
               </Link>

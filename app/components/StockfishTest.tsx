@@ -30,68 +30,6 @@ interface Variation {
   multipv: number;
 }
 
-const formatUCIMove = (move: string, chess: Chess): string => {
-  try {
-    const from = move.slice(0, 2);
-    const to = move.slice(2, 4);
-    const promotion = move.length > 4 ? move[4] : undefined;
-    
-    const moves = chess.moves({ verbose: true });
-    const matchingMove = moves.find(m => 
-      m.from === from && 
-      m.to === to && 
-      (!promotion || m.promotion === promotion)
-    );
-    
-    if (matchingMove) {
-      chess.move(matchingMove);
-      return matchingMove.san;
-    }
-    return move;
-  } catch (err) {
-    console.error('Error formatting move:', move, err);
-    return move;
-  }
-};
-
-const formatMoves = (moves: string[]): React.ReactElement => {
-  if (!moves || !moves.length) return <span>No moves available</span>;
-  
-  try {
-    const chess = new Chess();
-    const formattedMoves: string[] = [];
-    
-    for (const move of moves) {
-      const san = formatUCIMove(move, chess);
-      // Replace piece letters with symbols
-      const symbolized = san
-        .replace(/N/g, '♘')
-        .replace(/B/g, '♗')
-        .replace(/R/g, '♖')
-        .replace(/Q/g, '♕')
-        .replace(/K/g, '♔');
-      formattedMoves.push(symbolized);
-    }
-    
-    return (
-      <div className="font-mono text-gray-300">
-        {formattedMoves.map((move, index) => {
-          const moveNumber = Math.floor(index / 2) + 1;
-          const isWhiteMove = index % 2 === 0;
-          return (
-            <span key={index} className="mr-2">
-              {isWhiteMove ? `${moveNumber}. ` : ''}{move}
-            </span>
-          );
-        })}
-      </div>
-    );
-  } catch (err) {
-    console.error('Error formatting moves:', err);
-    return <span>Error formatting moves</span>;
-  }
-};
-
 // Add a check for browser environment
 const hardwareConcurrency = typeof window !== 'undefined' ? navigator.hardwareConcurrency || 1 : 1;
 
@@ -101,7 +39,7 @@ export default function StockfishTest() {
     threads: typeof window !== 'undefined' ? navigator.hardwareConcurrency || 1 : 1,
     hash: 1024,
     wasmSupported: false,
-    multiPV: 3,
+    multiPV: 5,
     depth: 40,
     skillLevel: 20,
     contempt: 0
@@ -109,7 +47,9 @@ export default function StockfishTest() {
   const [analysisInfo, setAnalysisInfo] = useState<AnalysisInfo>({});
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [variations, setVariations] = useState<Variation[]>([]);
+  const [fenInput, setFenInput] = useState('');
   const workerRef = useRef<Worker | null>(null);
+  const [isBlackToMove, setIsBlackToMove] = useState(false);
 
   useEffect(() => {
     const initEngine = () => {
@@ -141,10 +81,12 @@ export default function StockfishTest() {
 
             const scoreMatch = message.match(/score (cp|mate) (-?\d+)/);
             if (scoreMatch) {
-              if (scoreMatch[1] === 'cp') {
-                info.score = parseInt(scoreMatch[2]) / 100;
+              const [, type, value] = scoreMatch;
+              const numericValue = parseInt(value);
+              if (type === 'cp') {
+                info.score = numericValue;
               } else {
-                info.mate = parseInt(scoreMatch[2]);
+                info.mate = numericValue;
               }
             }
 
@@ -154,61 +96,97 @@ export default function StockfishTest() {
             const npsMatch = message.match(/nps (\d+)/);
             if (npsMatch) info.nps = parseInt(npsMatch[1]);
 
-            const timeMatch = message.match(/time (\d+)/);
-            if (timeMatch) info.time = parseInt(timeMatch[1]);
-
             const multipvMatch = message.match(/multipv (\d+)/);
             if (multipvMatch) info.multipv = parseInt(multipvMatch[1]);
 
             const pvMatch = message.match(/pv (.+)/);
-            if (pvMatch) {
-              // Convert UCI moves to algebraic notation
-              const uciMoves: string[] = pvMatch[1].split(' ');
+            if (pvMatch && info.multipv && (info.score !== undefined || info.mate !== undefined)) {
+              const uciMoves = pvMatch[1].split(' ');
               const chess = new Chess();
-              info.pv = uciMoves.map((uciMove: string) => {
-                const from = uciMove.slice(0, 2);
-                const to = uciMove.slice(2, 4);
-                const promotion = uciMove.length > 4 ? uciMove[4] : undefined;
-                
-                const moves = chess.moves({ verbose: true });
-                const matchingMove = moves.find(m => 
-                  m.from === from && 
-                  m.to === to && 
-                  (!promotion || m.promotion === promotion)
-                );
-                
-                if (matchingMove) {
-                  chess.move(matchingMove);
-                  return matchingMove.san;
+              const sanMoves: string[] = [];
+              
+              for (const uciMove of uciMoves) {
+                try {
+                  const from = uciMove.slice(0, 2);
+                  const to = uciMove.slice(2, 4);
+                  const promotion = uciMove.length > 4 ? uciMove[4] : undefined;
+                  
+                  const moves = chess.moves({ verbose: true });
+                  const matchingMove = moves.find(m => 
+                    m.from === from && 
+                    m.to === to && 
+                    (!promotion || m.promotion === promotion)
+                  );
+                  
+                  if (matchingMove) {
+                    chess.move(matchingMove);
+                    sanMoves.push(matchingMove.san);
+                  }
+                } catch (err) {
+                  console.error('Error converting move:', uciMove, err);
+                  break;
                 }
-                return uciMove;
-              });
+              }
+              
+              if (sanMoves.length > 0) {
+                setVariations(prev => {
+                  const newVariations = [...prev];
+                  
+                  // Convert centipawns to pawns and keep scores from engine's perspective
+                  const scoreInPawns = (info.score ?? 0) / 100;  // Always divide by 100, keep original sign
+                  
+                  // Create new variation
+                  const newVariation = {
+                    score: scoreInPawns,
+                    mate: info.mate,  // Keep original mate score
+                    moves: sanMoves,
+                    depth: info.depth,
+                    multipv: info.multipv!
+                  };
+
+                  // Update or add variation based on multipv
+                  const index = newVariations.findIndex(v => v.multipv === info.multipv);
+                  if (index !== -1) {
+                    newVariations[index] = newVariation;
+                  } else {
+                    newVariations.push(newVariation);
+                  }
+
+                  // Sort variations by score
+                  newVariations.sort((a, b) => {
+                    // Handle mate scores first
+                    if (a.mate !== undefined && b.mate !== undefined) {
+                      // For both players: positive mate is better than negative mate
+                      if (a.mate > 0 && b.mate > 0) return a.mate - b.mate; // Shorter mate is better
+                      if (a.mate < 0 && b.mate < 0) return b.mate - a.mate; // Longer mate is better
+                      return b.mate - a.mate; // Positive beats negative
+                    }
+                    // Mate beats non-mate
+                    if (a.mate !== undefined) return a.mate > 0 ? -1 : 1;
+                    if (b.mate !== undefined) return b.mate > 0 ? 1 : -1;
+                    // Compare regular scores - higher is always better from engine's perspective
+                    return b.score! - a.score!;
+                  });
+
+                  // Keep only top 5 variations
+                  return newVariations.slice(0, 5);
+                });
+              }
             }
 
             setAnalysisInfo(info);
-
-            // Update variations with converted moves
-            if (info.multipv && info.pv) {
-              setVariations(prev => {
-                const newVariations = [...prev];
-                const index = info.multipv! - 1;
-                newVariations[index] = {
-                  score: info.score,
-                  mate: info.mate,
-                  moves: info.pv!,
-                  depth: info.depth,
-                  multipv: info.multipv!
-                };
-                return newVariations;
-              });
-            }
           }
 
           if (message === 'uciok') {
             setEngineStatus('UCI initialized');
-            // Set initial options after UCI is initialized
-            worker.postMessage(`setoption name Skill Level value ${config.skillLevel}`);
-            worker.postMessage(`setoption name Contempt value ${config.contempt}`);
+            worker.postMessage('setoption name MultiPV value 5');
+            worker.postMessage('setoption name Threads value ' + config.threads);
+            worker.postMessage('setoption name Hash value ' + config.hash);
+            worker.postMessage('setoption name Use NNUE value true');
+            worker.postMessage('setoption name UCI_AnalyseMode value true');
+            worker.postMessage('setoption name Skill Level value ' + config.skillLevel);
+            worker.postMessage('setoption name Contempt value ' + config.contempt);
+            worker.postMessage('isready');
           } else if (message === 'readyok') {
             setEngineStatus('Engine ready');
           }
@@ -222,8 +200,6 @@ export default function StockfishTest() {
 
         // Initialize UCI
         worker.postMessage('uci');
-        worker.postMessage('isready');
-
       } catch (err) {
         console.error('Failed to initialize Stockfish:', err);
         setEngineStatus('Failed');
@@ -241,7 +217,7 @@ export default function StockfishTest() {
         workerRef.current.terminate();
       }
     };
-  }, [config.skillLevel, config.contempt]);
+  }, [config.skillLevel, config.contempt, config.threads, config.hash]);
 
   const updateEngineOption = (option: string, value: number) => {
     if (!workerRef.current || engineStatus !== 'Engine ready') return;
@@ -258,8 +234,12 @@ export default function StockfishTest() {
 
     try {
       setIsAnalyzing(true);
+      setVariations([]);
+      setIsBlackToMove(false); // Starting position is White to move
+      workerRef.current.postMessage('stop');
+      workerRef.current.postMessage('setoption name MultiPV value 5');
       workerRef.current.postMessage('position startpos');
-      workerRef.current.postMessage(`go depth ${config.depth}`);
+      workerRef.current.postMessage(`go depth ${config.depth} multipv 5`);
     } catch (err) {
       console.error('Analysis error:', err);
     }
@@ -273,9 +253,12 @@ export default function StockfishTest() {
 
     try {
       setIsAnalyzing(true);
-      // Test a specific position (Sicilian Defense)
+      setVariations([]);
+      setIsBlackToMove(false); // Sicilian position is White to move
+      workerRef.current.postMessage('stop');
+      workerRef.current.postMessage('setoption name MultiPV value 5');
       workerRef.current.postMessage('position fen rnbqkbnr/pp1ppppp/8/2p5/4P3/8/PPPP1PPP/RNBQKBNR w KQkq c6 0 2');
-      workerRef.current.postMessage(`go depth ${config.depth}`);
+      workerRef.current.postMessage(`go depth ${config.depth} multipv 5`);
     } catch (err) {
       console.error('Analysis error:', err);
     }
@@ -295,12 +278,174 @@ export default function StockfishTest() {
 
   const formatScore = (score?: number, mate?: number): string => {
     if (mate !== undefined) {
-      return `M${Math.abs(mate)}`;
+      return (isBlackToMove ? '-' : (mate > 0 ? '+' : '')) + `M${Math.abs(mate)}`;
     }
     if (score !== undefined) {
-      return (score > 0 ? '+' : '') + score.toFixed(2);
+      return (isBlackToMove ? '-' : (score > 0 ? '+' : '')) + Math.abs(score).toFixed(2);
     }
     return 'N/A';
+  };
+
+  // Helper to determine score color based on the score value
+  const getScoreColor = (score?: number, mate?: number): string => {
+    if (isBlackToMove) return 'text-red-400';  // Always red for Black's turn
+    if (mate !== undefined) {
+      return mate > 0 ? 'text-green-400' : 'text-red-400';
+    }
+    if (score !== undefined) {
+      if (Math.abs(score) < 0.2) return 'text-white'; // Near equal position (±0.2 pawns)
+      return score > 0 ? 'text-green-400' : 'text-red-400';
+    }
+    return 'text-gray-400';
+  };
+
+  // Add FEN validation function
+  const isValidFen = (fen: string): boolean => {
+    try {
+      const chess = new Chess();
+      chess.load(fen);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  // Add analyze FEN function
+  const analyzeFen = () => {
+    if (!workerRef.current) {
+      console.error('Engine not initialized');
+      return;
+    }
+
+    if (!isValidFen(fenInput)) {
+      alert('Invalid FEN position');
+      return;
+    }
+
+    try {
+      const chess = new Chess(fenInput);
+      setIsBlackToMove(chess.turn() === 'b');
+      setIsAnalyzing(true);
+      setVariations([]);
+      workerRef.current.postMessage('stop');
+      workerRef.current.postMessage('ucinewgame');
+      workerRef.current.postMessage('setoption name MultiPV value 5');
+      workerRef.current.postMessage('isready');
+      workerRef.current.postMessage(`position fen ${fenInput}`);
+      workerRef.current.postMessage(`go depth ${config.depth} multipv 5`);
+
+      // Update the message handler to use this position for move validation
+      workerRef.current.onmessage = (e: MessageEvent) => {
+        const message = e.data;
+
+        if (message.startsWith('info')) {
+          const info: AnalysisInfo = {};
+          
+          const depthMatch = message.match(/depth (\d+)/);
+          if (depthMatch) info.depth = parseInt(depthMatch[1]);
+
+          const scoreMatch = message.match(/score (cp|mate) (-?\d+)/);
+          if (scoreMatch) {
+            const [, type, value] = scoreMatch;
+            const numericValue = parseInt(value);
+            if (type === 'cp') {
+              info.score = numericValue;
+            } else {
+              info.mate = numericValue;
+            }
+          }
+
+          const nodesMatch = message.match(/nodes (\d+)/);
+          if (nodesMatch) info.nodes = parseInt(nodesMatch[1]);
+
+          const npsMatch = message.match(/nps (\d+)/);
+          if (npsMatch) info.nps = parseInt(npsMatch[1]);
+
+          const multipvMatch = message.match(/multipv (\d+)/);
+          if (multipvMatch) info.multipv = parseInt(multipvMatch[1]);
+
+          const pvMatch = message.match(/pv (.+)/);
+          if (pvMatch && info.multipv && (info.score !== undefined || info.mate !== undefined)) {
+            const uciMoves = pvMatch[1].split(' ');
+            const positionChess = new Chess(fenInput);
+            const sanMoves: string[] = [];
+            
+            for (const uciMove of uciMoves) {
+              try {
+                const from = uciMove.slice(0, 2);
+                const to = uciMove.slice(2, 4);
+                const promotion = uciMove.length > 4 ? uciMove[4] : undefined;
+                
+                const moves = positionChess.moves({ verbose: true });
+                const matchingMove = moves.find(m => 
+                  m.from === from && 
+                  m.to === to && 
+                  (!promotion || m.promotion === promotion)
+                );
+                
+                if (matchingMove) {
+                  positionChess.move(matchingMove);
+                  sanMoves.push(matchingMove.san);
+                }
+              } catch (err) {
+                console.error('Error converting move:', uciMove, err);
+                break;
+              }
+            }
+            
+            if (sanMoves.length > 0) {
+              setVariations(prev => {
+                const newVariations = [...prev];
+                
+                // Convert centipawns to pawns and keep scores from engine's perspective
+                const scoreInPawns = (info.score ?? 0) / 100;  // Always divide by 100, keep original sign
+                
+                // Create new variation
+                const newVariation = {
+                  score: scoreInPawns,
+                  mate: info.mate,  // Keep original mate score
+                  moves: sanMoves,
+                  depth: info.depth,
+                  multipv: info.multipv!
+                };
+
+                // Update or add variation based on multipv
+                const index = newVariations.findIndex(v => v.multipv === info.multipv);
+                if (index !== -1) {
+                  newVariations[index] = newVariation;
+                } else {
+                  newVariations.push(newVariation);
+                }
+
+                // Sort variations by score
+                newVariations.sort((a, b) => {
+                  // Handle mate scores first
+                  if (a.mate !== undefined && b.mate !== undefined) {
+                    // For both players: positive mate is better than negative mate
+                    if (a.mate > 0 && b.mate > 0) return a.mate - b.mate; // Shorter mate is better
+                    if (a.mate < 0 && b.mate < 0) return b.mate - a.mate; // Longer mate is better
+                    return b.mate - a.mate; // Positive beats negative
+                  }
+                  // Mate beats non-mate
+                  if (a.mate !== undefined) return a.mate > 0 ? -1 : 1;
+                  if (b.mate !== undefined) return b.mate > 0 ? 1 : -1;
+                  // Compare regular scores - higher is always better from engine's perspective
+                  return b.score! - a.score!;
+                });
+
+                // Keep only top 5 variations
+                return newVariations.slice(0, 5);
+              });
+            }
+          }
+
+          setAnalysisInfo(info);
+        }
+      };
+    } catch (err) {
+      console.error('Analysis error:', err);
+      setIsAnalyzing(false);
+    }
   };
 
   return (
@@ -420,6 +565,26 @@ export default function StockfishTest() {
           </div>
         </div>
 
+        {/* FEN Input Section */}
+        <div className="mb-4 p-4 bg-gray-700/50 rounded-lg">
+          <h3 className="text-gray-200 font-bold mb-2">Position Analysis</h3>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={fenInput}
+              onChange={(e) => setFenInput(e.target.value)}
+              placeholder="Enter FEN position..."
+              className="flex-1 bg-gray-700 text-gray-200 px-3 py-2 rounded border border-gray-600 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            />
+            <button
+              onClick={analyzeFen}
+              className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 transition-colors"
+            >
+              Analyze Position
+            </button>
+          </div>
+        </div>
+
         <div className="flex flex-col gap-2">
           <button
             onClick={testStartPos}
@@ -442,60 +607,64 @@ export default function StockfishTest() {
         </div>
 
         {variations.length > 0 && (
-          <div className="space-y-1 mt-4 bg-gray-700/50 rounded-lg p-4">
-            {variations.map((variation, index) => (
-              <div 
-                key={index}
-                className="text-gray-300 flex items-start gap-4 font-mono"
-              >
-                <span className={`w-16 flex-shrink-0 font-bold ${
-                  variation.score !== undefined ? (
-                    variation.score > 0 ? 'text-green-400' : 
-                    variation.score < 0 ? 'text-red-400' : 
-                    'text-gray-400'
-                  ) : 'text-gray-400'
-                }`}>
-                  {formatScore(variation.score, variation.mate)}
-                </span>
-                {formatMoves(variation.moves)}
+          <div className="mt-4 bg-gray-700/50 rounded-lg p-4">
+            <div className="mb-4 grid grid-cols-[auto_1fr] gap-x-4 text-sm text-gray-300 font-mono">
+              <div className="contents">
+                <div className="font-bold text-blue-300">CPU:</div>
+                <div>{config.threads} threads</div>
               </div>
-            ))}
-          </div>
-        )}
+              <div className="contents">
+                <div className="font-bold text-blue-300">Hash:</div>
+                <div>{config.hash}MB</div>
+              </div>
+              <div className="contents">
+                <div className="font-bold text-blue-300">Depth:</div>
+                <div>{analysisInfo.depth || 0}</div>
+              </div>
+              <div className="contents">
+                <div className="font-bold text-blue-300">Nodes:</div>
+                <div>{formatNumber(analysisInfo.nodes || 0)}</div>
+              </div>
+              <div className="contents">
+                <div className="font-bold text-blue-300">Speed:</div>
+                <div>{formatNumber(analysisInfo.nps || 0)}/s</div>
+              </div>
+            </div>
 
-        <div className="flex flex-col gap-2">
-          <div className="flex items-center justify-between">
-            <h3 className="font-bold text-white text-lg">Engine Analysis</h3>
-            <div className="flex items-center gap-4 text-sm">
-              <span title="CPU Threads" className="flex items-center gap-1">
-                <span>🧠</span>
-                <span className="font-mono text-blue-300">{typeof window !== 'undefined' ? navigator.hardwareConcurrency || 1 : 1} cores</span>
-              </span>
-              <span title="Hash Table Size" className="flex items-center gap-1">
-                <span>💾</span>
-                <span className="font-mono text-blue-300">1024MB</span>
-              </span>
-              {analysisInfo.depth && (
-                <span title="Search Depth" className="flex items-center gap-1">
-                  <span>🔍</span>
-                  <span className="font-mono text-blue-300">depth {analysisInfo.depth}</span>
-                </span>
-              )}
-              {analysisInfo.nodes && (
-                <span title="Nodes Searched" className="flex items-center gap-1">
-                  <span>🌳</span>
-                  <span className="font-mono text-blue-300">{formatNumber(analysisInfo.nodes)} nodes</span>
-                </span>
-              )}
-              {analysisInfo.nps && (
-                <span title="Speed" className="flex items-center gap-1">
-                  <span>⚡</span>
-                  <span className="font-mono text-blue-300">{formatNumber(analysisInfo.nps)}/s</span>
-                </span>
-              )}
+            <div className="space-y-2">
+              {variations.slice(0, 5).map((variation, index) => (
+                <div key={index} className="bg-gray-800/50 p-4 rounded-lg">
+                  <div className="flex items-center gap-4">
+                    <span className="w-8 h-8 flex items-center justify-center bg-gray-700 rounded-full text-blue-300 font-bold">
+                      {index + 1}
+                    </span>
+                    <span className={`font-mono font-bold text-lg ${getScoreColor(variation.score, variation.mate)}`}>
+                      {formatScore(variation.score, variation.mate)}
+                    </span>
+                    {variation.moves.length > 0 && (
+                      <span className="text-white font-bold font-mono text-lg">
+                        {variation.moves[0]}
+                      </span>
+                    )}
+                  </div>
+                  {variation.moves.length > 1 && (
+                    <div className="mt-2 font-mono text-gray-300">
+                      {variation.moves.slice(1).map((move, i) => {
+                        const moveNumber = Math.floor((i + 1) / 2) + 1;
+                        const isWhiteMove = (i + 1) % 2 === 1;
+                        return (
+                          <span key={i} className="mr-2">
+                            {isWhiteMove ? `${moveNumber}. ` : ''}{move}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              ))}
             </div>
           </div>
-        </div>
+        )}
       </div>
     </div>
   );

@@ -29,6 +29,7 @@ export interface ChessViewerProps {
 export interface ChessViewerHandle {
   handleFileUpload: (file: File) => Promise<void>;
   handlePaste: () => Promise<void>;
+  handlePasteFEN: () => Promise<void>;
 }
 
 const ChessViewer = forwardRef<ChessViewerHandle, ChessViewerProps>((props, ref) => {
@@ -122,7 +123,6 @@ const ChessViewer = forwardRef<ChessViewerHandle, ChessViewerProps>((props, ref)
             
             // Update analysis info for real-time stats
             setAnalysisInfo(prev => ({
-              ...prev,
               depth: depthMatch ? parseInt(depthMatch[1]) : prev.depth,
               nodes: nodesMatch ? parseInt(nodesMatch[1]) : prev.nodes,
               nps: npsMatch ? parseInt(npsMatch[1]) : prev.nps
@@ -188,11 +188,14 @@ const ChessViewer = forwardRef<ChessViewerHandle, ChessViewerProps>((props, ref)
 
         // Initialize engine with UCI commands
         worker.postMessage('uci');
-        worker.postMessage('setoption name MultiPV value 3'); // Request top 3 lines
+        worker.postMessage('setoption name MultiPV value 4'); // Request top 4 lines
         worker.postMessage('setoption name Threads value ' + (navigator.hardwareConcurrency || 1));
-        worker.postMessage('setoption name Hash value 1024');
+        worker.postMessage('setoption name Hash value 2048'); // Increased hash size to 2GB
         worker.postMessage('setoption name Use NNUE value true'); // Enable NNUE evaluation
         worker.postMessage('setoption name UCI_AnalyseMode value true'); // Enable analysis mode
+        worker.postMessage('setoption name Minimum Thinking Time value 0'); // No minimum thinking time
+        worker.postMessage('setoption name Move Overhead value 10'); // Reduce move overhead
+        worker.postMessage('setoption name Slow Mover value 80'); // Faster time management
         worker.postMessage('isready');
 
         console.log('Stockfish initialized with', wasmSupported ? 'WebAssembly' : 'JavaScript', 'version');
@@ -215,7 +218,7 @@ const ChessViewer = forwardRef<ChessViewerHandle, ChessViewerProps>((props, ref)
       setAnalysis([]); // Clear previous analysis
       engineRef.current.postMessage('stop');
       engineRef.current.postMessage('position fen ' + currentFen);
-      engineRef.current.postMessage('go depth 40 multipv 3');
+      engineRef.current.postMessage('go depth 40 multipv 4');
     }
   }, [isAnalyzing, chessboard]);
 
@@ -301,6 +304,50 @@ const ChessViewer = forwardRef<ChessViewerHandle, ChessViewerProps>((props, ref)
       alert('Error pasting PGN');
     }
   }, [loadPGN]);
+
+  // Add FEN validation function
+  const isValidFen = (fen: string): boolean => {
+    try {
+      const chess = new Chess();
+      chess.load(fen);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const handlePasteFEN = useCallback(async () => {
+    console.log('ChessViewer handlePasteFEN called');
+    try {
+      const text = await navigator.clipboard.readText();
+      console.log('Clipboard FEN content:', text);
+      
+      if (!isValidFen(text)) {
+        alert('Invalid FEN position');
+        return;
+      }
+
+      // Reset the state
+      setGames([]);
+      setCurrentGameIndex(0);
+      setCurrentMoveIndex(-1);
+      
+      // Create a new chess instance with the FEN
+      const chess = new Chess();
+      chess.load(text);
+      setChessboard(chess);
+
+      // Start analysis if enabled
+      if (isAnalyzing && engineRef.current) {
+        engineRef.current.postMessage('stop');
+        engineRef.current.postMessage('position fen ' + text);
+        engineRef.current.postMessage('go depth 40 multipv 4');
+      }
+    } catch (error) {
+      console.error('Error pasting FEN:', error);
+      alert('Error pasting FEN');
+    }
+  }, [isAnalyzing]);
 
   const loadGame = (gameIndex: number) => {
     if (gameIndex < 0 || gameIndex >= games.length) return;
@@ -399,7 +446,7 @@ const ChessViewer = forwardRef<ChessViewerHandle, ChessViewerProps>((props, ref)
       setAnalysis([]);
       if (engineRef.current) {
         engineRef.current.postMessage('position fen ' + chessboard.fen());
-        engineRef.current.postMessage('go depth 40 multipv 3');
+        engineRef.current.postMessage('go depth 40 multipv 4');
       }
     } else {
       setIsAnalyzing(false);
@@ -432,7 +479,7 @@ const ChessViewer = forwardRef<ChessViewerHandle, ChessViewerProps>((props, ref)
                 </span>
                 <span title="Hash Table Size" className="flex items-center gap-1">
                   <span>💾</span>
-                  <span className="font-mono text-blue-300">1024MB</span>
+                  <span className="font-mono text-blue-300">2048MB</span>
                 </span>
                 <span title="Search Depth" className="flex items-center gap-1">
                   <span>🔍</span>
@@ -476,13 +523,16 @@ const ChessViewer = forwardRef<ChessViewerHandle, ChessViewerProps>((props, ref)
                     <td className="px-4 py-3">
                       {line?.score !== undefined && (
                         <span className={`font-mono font-bold ${
-                          line.score > 0 ? 'text-green-400' : 
-                          line.score < 0 ? 'text-red-400' : 
+                          (chessboard.turn() === 'w' ? line.score : -line.score) > 0 ? 'text-green-400' : 
+                          (chessboard.turn() === 'w' ? line.score : -line.score) < 0 ? 'text-red-400' : 
                           'text-white'
                         }`}>
                           {line.mate !== undefined 
-                            ? `M${Math.abs(line.mate)}` 
-                            : (line.score > 0 ? '+' : '') + line.score.toFixed(2)}
+                            ? (chessboard.turn() === 'w' ? (line.mate > 0 ? '+' : '') + `M${Math.abs(line.mate)}` :
+                               (line.mate < 0 ? '+' : '') + `M${Math.abs(line.mate)}`)
+                            : (chessboard.turn() === 'w' 
+                                ? (line.score > 0 ? '+' : '') + line.score.toFixed(2)
+                                : (-line.score > 0 ? '+' : '') + (-line.score).toFixed(2))}
                         </span>
                       )}
                     </td>
@@ -520,11 +570,12 @@ const ChessViewer = forwardRef<ChessViewerHandle, ChessViewerProps>((props, ref)
     );
   };
 
-  // Make handleFileUpload and handlePaste stable with useCallback
+  // Make handleFileUpload, handlePaste, and handlePasteFEN stable with useCallback
   useImperativeHandle(ref, () => ({
     handleFileUpload,
-    handlePaste
-  }), [handleFileUpload, handlePaste]);
+    handlePaste,
+    handlePasteFEN
+  }), [handleFileUpload, handlePaste, handlePasteFEN]);
 
   ChessViewer.displayName = 'ChessViewer';
 
