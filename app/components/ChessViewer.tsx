@@ -4,6 +4,10 @@ import React, { useState, useEffect, useRef, useCallback, forwardRef, useImperat
 import { Chess } from 'chess.js';
 import { Chessboard } from 'react-chessboard';
 import type { Square } from 'chess.js';
+import { StockfishService, EngineConfig, AnalysisInfo, Variation } from '../services/StockfishService';
+
+// Use WASM version only
+const STOCKFISH_PATH = '/stockfish/stockfish-nnue-16.js';
 
 interface ChessGame {
   pgn: string;
@@ -52,9 +56,9 @@ const ChessViewer = forwardRef<ChessViewerHandle, ChessViewerProps>((props, ref)
     maxMoves: null
   });
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [analysis, setAnalysis] = useState<AnalysisMove[]>([]);
-  const [analysisInfo, setAnalysisInfo] = useState({ depth: 0, nodes: 0, nps: 0 });
-  const engineRef = useRef<Worker | null>(null);
+  const [analysis, setAnalysis] = useState<Variation[]>([]);
+  const [analysisInfo, setAnalysisInfo] = useState<AnalysisInfo>({ depth: 0, nodes: 0, nps: 0 });
+  const engineRef = useRef<StockfishService | null>(null);
 
   const currentGame = games[currentGameIndex];
   const whitePlayer = currentGame?.headers['White'] || 'White';
@@ -66,6 +70,10 @@ const ChessViewer = forwardRef<ChessViewerHandle, ChessViewerProps>((props, ref)
     
     const newChess = new Chess();
     if (currentGame) {
+      // Clear analysis before loading new position
+      setAnalysis([]);
+      setAnalysisInfo({ depth: 0, nodes: 0, nps: 0 });
+
       // Apply moves up to the selected index
       for (let i = 0; i <= moveIndex; i++) {
         newChess.move(currentGame.moves[i]);
@@ -73,6 +81,12 @@ const ChessViewer = forwardRef<ChessViewerHandle, ChessViewerProps>((props, ref)
       
       setChessboard(newChess);
       setCurrentMoveIndex(moveIndex);
+
+      // Start analysis of the new position
+      if (engineRef.current) {
+        engineRef.current.analyze(newChess.fen());
+        setIsAnalyzing(true);
+      }
     }
   }, [currentGame]);
 
@@ -95,132 +109,6 @@ const ChessViewer = forwardRef<ChessViewerHandle, ChessViewerProps>((props, ref)
     window.addEventListener('resize', updateDimensions);
     return () => window.removeEventListener('resize', updateDimensions);
   }, []);
-
-  useEffect(() => {
-    // Initialize Stockfish as a Web Worker
-    if (typeof window !== 'undefined') {
-      try {
-        // Check for WebAssembly support
-        const wasmSupported = typeof WebAssembly === 'object' && 
-          WebAssembly.validate(Uint8Array.of(0x0, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00));
-
-        // Create worker with appropriate version
-        const worker = new Worker(wasmSupported ? '/stockfish.wasm.js' : '/stockfish.js');
-        engineRef.current = worker;
-
-        // Set up message handler
-        worker.onmessage = (e) => {
-          const message = e.data;
-          if (typeof message !== 'string') return;
-
-          if (message.startsWith('info')) {
-            const depthMatch = message.match(/depth (\d+)/);
-            const nodesMatch = message.match(/nodes (\d+)/);
-            const npsMatch = message.match(/nps (\d+)/);
-            const scoreMatch = message.match(/score (cp|mate) (-?\d+)/);
-            const multipvMatch = message.match(/multipv (\d+)/);
-            const moveMatch = message.match(/pv ([a-h][1-8][a-h][1-8][qrbn]?\s*)+/);
-            
-            // Update analysis info for real-time stats
-            setAnalysisInfo(prev => ({
-              depth: depthMatch ? parseInt(depthMatch[1]) : prev.depth,
-              nodes: nodesMatch ? parseInt(nodesMatch[1]) : prev.nodes,
-              nps: npsMatch ? parseInt(npsMatch[1]) : prev.nps
-            }));
-
-            // Process analysis info immediately
-            if (moveMatch && scoreMatch && multipvMatch) {
-              const moves = moveMatch[0].split(' ').slice(1); // Get all moves in PV
-              const [, scoreType, scoreValue] = scoreMatch;
-              const score = scoreType === 'cp' ? parseInt(scoreValue) / 100 : null;
-              const mate = scoreType === 'mate' ? parseInt(scoreValue) : undefined;
-              const depth = depthMatch ? parseInt(depthMatch[1]) : 0;
-              const nodes = nodesMatch ? parseInt(nodesMatch[1]) : 0;
-              const nps = npsMatch ? parseInt(npsMatch[1]) : 0;
-              const tbhits = 0;
-              const multipv = parseInt(multipvMatch[1]);
-
-              // Convert UCI moves to SAN notation
-              const chess = new Chess(chessboard.fen());
-              const sanMoves: string[] = [];
-              
-              for (const move of moves) {
-                try {
-                  const from = move.slice(0, 2);
-                  const to = move.slice(2, 4);
-                  const promotion = move.length > 4 ? move[4] : undefined;
-                  
-                  const result = chess.move({
-                    from,
-                    to,
-                    promotion
-                  });
-                  
-                  if (result) {
-                    sanMoves.push(result.san);
-                  }
-                } catch {
-                  console.error('Error converting move:', move);
-                  break;
-                }
-              }
-              
-              if (sanMoves.length > 0) {
-                setAnalysis(prev => {
-                  const newAnalysis = [...prev];
-                  // Update or add the analysis for this multipv line
-                  newAnalysis[multipv - 1] = {
-                    move: sanMoves[0],
-                    score: score !== null ? score : 0,
-                    mate,
-                    depth,
-                    nodes,
-                    nps,
-                    tbhits,
-                    pv: sanMoves
-                  };
-                  return newAnalysis;
-                });
-              }
-            }
-          }
-        };
-
-        // Initialize engine with UCI commands
-        worker.postMessage('uci');
-        worker.postMessage('setoption name MultiPV value 4'); // Request top 4 lines
-        worker.postMessage('setoption name Threads value ' + (navigator.hardwareConcurrency || 1));
-        worker.postMessage('setoption name Hash value 2048'); // Increased hash size to 2GB
-        worker.postMessage('setoption name Use NNUE value true'); // Enable NNUE evaluation
-        worker.postMessage('setoption name UCI_AnalyseMode value true'); // Enable analysis mode
-        worker.postMessage('setoption name Minimum Thinking Time value 0'); // No minimum thinking time
-        worker.postMessage('setoption name Move Overhead value 10'); // Reduce move overhead
-        worker.postMessage('setoption name Slow Mover value 80'); // Faster time management
-        worker.postMessage('isready');
-
-        console.log('Stockfish initialized with', wasmSupported ? 'WebAssembly' : 'JavaScript', 'version');
-      } catch (error) {
-        console.error('Failed to initialize Stockfish:', error);
-      }
-    }
-
-    return () => {
-      if (engineRef.current) {
-        engineRef.current.postMessage('quit');
-        engineRef.current.terminate();
-      }
-    };
-  }, [chessboard]);
-
-  useEffect(() => {
-    const currentFen = chessboard.fen();
-    if (isAnalyzing && engineRef.current) {
-      setAnalysis([]); // Clear previous analysis
-      engineRef.current.postMessage('stop');
-      engineRef.current.postMessage('position fen ' + currentFen);
-      engineRef.current.postMessage('go depth 40 multipv 4');
-    }
-  }, [isAnalyzing, chessboard]);
 
   const loadPGN = useCallback((pgnText: string) => {
     try {
@@ -281,29 +169,48 @@ const ChessViewer = forwardRef<ChessViewerHandle, ChessViewerProps>((props, ref)
       setCurrentGameIndex(0);
       setCurrentMoveIndex(-1);
       setChessboard(new Chess());
+      setAnalysis([]);
+      setAnalysisInfo({ depth: 0, nodes: 0, nps: 0 });
       
       // Load the PGN and ensure we start at move 1
       const success = loadPGN(text);
       if (!success) {
         throw new Error('Failed to parse PGN format');
       }
+
+      // Start analysis of the current position
+      if (engineRef.current) {
+        engineRef.current.analyze(chessboard.fen());
+        setIsAnalyzing(true);
+      }
     } catch (error) {
       console.error('Error loading PGN file:', error);
       alert('Error loading PGN file. Please check the file format.');
     }
-  }, [loadPGN]);
+  }, [loadPGN, chessboard]);
 
   const handlePaste = useCallback(async () => {
     console.log('ChessViewer handlePaste called');
     try {
       const text = await navigator.clipboard.readText();
       console.log('Clipboard content:', text.slice(0, 100) + '...'); // Log first 100 chars
+      
+      // Clear analysis before loading new PGN
+      setAnalysis([]);
+      setAnalysisInfo({ depth: 0, nodes: 0, nps: 0 });
+      
       loadPGN(text);
+
+      // Start analysis of the current position
+      if (engineRef.current) {
+        engineRef.current.analyze(chessboard.fen());
+        setIsAnalyzing(true);
+      }
     } catch (error) {
       console.error('Error pasting PGN:', error);
       alert('Error pasting PGN');
     }
-  }, [loadPGN]);
+  }, [loadPGN, chessboard]);
 
   // Add FEN validation function
   const isValidFen = (fen: string): boolean => {
@@ -327,27 +234,28 @@ const ChessViewer = forwardRef<ChessViewerHandle, ChessViewerProps>((props, ref)
         return;
       }
 
-      // Reset the state
+      // Reset the state and clear analysis
       setGames([]);
       setCurrentGameIndex(0);
       setCurrentMoveIndex(-1);
+      setAnalysis([]);
+      setAnalysisInfo({ depth: 0, nodes: 0, nps: 0 });
       
       // Create a new chess instance with the FEN
       const chess = new Chess();
       chess.load(text);
       setChessboard(chess);
 
-      // Start analysis if enabled
-      if (isAnalyzing && engineRef.current) {
-        engineRef.current.postMessage('stop');
-        engineRef.current.postMessage('position fen ' + text);
-        engineRef.current.postMessage('go depth 40 multipv 4');
+      // Start analysis of the new position
+      if (engineRef.current) {
+        engineRef.current.analyze(text);
+        setIsAnalyzing(true);
       }
     } catch (error) {
       console.error('Error pasting FEN:', error);
       alert('Error pasting FEN');
     }
-  }, [isAnalyzing]);
+  }, []);
 
   const loadGame = (gameIndex: number) => {
     if (gameIndex < 0 || gameIndex >= games.length) return;
@@ -356,11 +264,21 @@ const ChessViewer = forwardRef<ChessViewerHandle, ChessViewerProps>((props, ref)
     const game = games[gameIndex];
     
     try {
+      // Clear analysis before loading new game
+      setAnalysis([]);
+      setAnalysisInfo({ depth: 0, nodes: 0, nps: 0 });
+
       chess.loadPgn(game.pgn);
       setCurrentGameIndex(gameIndex);
       setCurrentMoveIndex(0); // Start at move 1 instead of last move
       setChessboard(chess);
       goToMove(0); // Go to move 1
+
+      // Start analysis of the current position
+      if (engineRef.current) {
+        engineRef.current.analyze(chess.fen());
+        setIsAnalyzing(true);
+      }
     } catch (error) {
       console.error('Failed to load game:', error);
     }
@@ -440,18 +358,72 @@ const ChessViewer = forwardRef<ChessViewerHandle, ChessViewerProps>((props, ref)
     return matchesSearch && matchesResult && matchesDate && matchesMoves;
   });
 
+  useEffect(() => {
+    const initEngine = async () => {
+      try {
+        // Create engine instance with default config
+        engineRef.current = new StockfishService({
+          threads: Math.min(navigator.hardwareConcurrency || 1, 20),
+          hash: 128,
+          multiPV: 4,
+          depth: 40,
+          skillLevel: 20
+        });
+        
+        // Set up callbacks
+        engineRef.current.setCallbacks({
+          onAnalysis: (newVariations) => {
+            setAnalysis(newVariations);
+          },
+          onInfo: (info) => {
+            setAnalysisInfo(prev => ({...prev, ...info}));
+          },
+          onStatus: (status) => {
+            if (status.state === 'analyzing') {
+              setIsAnalyzing(true);
+            } else if (status.state === 'error') {
+              setIsAnalyzing(false);
+            }
+          }
+        });
+
+        // Initialize the engine
+        await engineRef.current.init();
+      } catch (err) {
+        console.error('Failed to initialize engine:', err);
+      }
+    };
+
+    // Only initialize in browser environment
+    if (typeof window !== 'undefined') {
+      initEngine();
+    }
+
+    return () => {
+      if (engineRef.current) {
+        engineRef.current.dispose();
+        engineRef.current = null;
+      }
+    };
+  }, []); // Run only once on mount
+
+  // Add effect to handle position changes
+  useEffect(() => {
+    if (isAnalyzing && engineRef.current) {
+      engineRef.current.analyze(chessboard.fen());
+    }
+  }, [isAnalyzing, chessboard]);
+
   const toggleAnalysis = () => {
     if (!isAnalyzing) {
       setIsAnalyzing(true);
-      setAnalysis([]);
       if (engineRef.current) {
-        engineRef.current.postMessage('position fen ' + chessboard.fen());
-        engineRef.current.postMessage('go depth 40 multipv 4');
+        engineRef.current.analyze(chessboard.fen());
       }
     } else {
       setIsAnalyzing(false);
       if (engineRef.current) {
-        engineRef.current.postMessage('stop');
+        engineRef.current.stop();
       }
     }
   };
@@ -475,11 +447,11 @@ const ChessViewer = forwardRef<ChessViewerHandle, ChessViewerProps>((props, ref)
               <div className="flex items-center gap-4 text-sm">
                 <span title="CPU Threads" className="flex items-center gap-1">
                   <span>🧠</span>
-                  <span className="font-mono text-blue-300">{navigator.hardwareConcurrency || 1} cores</span>
+                  <span className="font-mono text-blue-300">{engineRef.current?.config.threads || 1} cores</span>
                 </span>
                 <span title="Hash Table Size" className="flex items-center gap-1">
                   <span>💾</span>
-                  <span className="font-mono text-blue-300">2048MB</span>
+                  <span className="font-mono text-blue-300">{engineRef.current?.config.hash || 128}MB</span>
                 </span>
                 <span title="Search Depth" className="flex items-center gap-1">
                   <span>🔍</span>
@@ -487,12 +459,18 @@ const ChessViewer = forwardRef<ChessViewerHandle, ChessViewerProps>((props, ref)
                 </span>
                 <span title="Nodes Searched" className="flex items-center gap-1">
                   <span>🌳</span>
-                  <span className="font-mono text-blue-300">{formatNumber(analysisInfo.nodes || 0)} nodes</span>
+                  <span className="font-mono text-blue-300">{formatNumber(analysisInfo.nodes)} nodes</span>
                 </span>
                 <span title="Speed" className="flex items-center gap-1">
                   <span>⚡</span>
-                  <span className="font-mono text-blue-300">{formatNumber(analysisInfo.nps || 0)}/s</span>
+                  <span className="font-mono text-blue-300">{formatNumber(analysisInfo.nps)}/s</span>
                 </span>
+                {analysisInfo.tbhits && analysisInfo.tbhits > 0 && (
+                  <span title="Tablebase Hits" className="flex items-center gap-1">
+                    <span>📚</span>
+                    <span className="font-mono text-blue-300">{formatNumber(analysisInfo.tbhits)} TB</span>
+                  </span>
+                )}
               </div>
             </div>
           </div>
@@ -521,44 +499,37 @@ const ChessViewer = forwardRef<ChessViewerHandle, ChessViewerProps>((props, ref)
                       </span>
                     </td>
                     <td className="px-4 py-3">
-                      {line?.score !== undefined && (
-                        <span className={`font-mono font-bold ${
-                          (chessboard.turn() === 'w' ? line.score : -line.score) > 0 ? 'text-green-400' : 
-                          (chessboard.turn() === 'w' ? line.score : -line.score) < 0 ? 'text-red-400' : 
-                          'text-white'
-                        }`}>
-                          {line.mate !== undefined 
-                            ? (chessboard.turn() === 'w' ? (line.mate > 0 ? '+' : '') + `M${Math.abs(line.mate)}` :
-                               (line.mate < 0 ? '+' : '') + `M${Math.abs(line.mate)}`)
-                            : (chessboard.turn() === 'w' 
-                                ? (line.score > 0 ? '+' : '') + line.score.toFixed(2)
-                                : (-line.score > 0 ? '+' : '') + (-line.score).toFixed(2))}
-                        </span>
-                      )}
+                      <span className={`font-mono font-bold ${
+                        line.score > 0 ? 'text-green-400' : 
+                        line.score < 0 ? 'text-red-400' : 
+                        'text-white'
+                      }`}>
+                        {line.mate !== undefined 
+                          ? (line.mate > 0 ? '+' : '') + `M${Math.abs(line.mate)}`
+                          : (line.score > 0 ? '+' : '') + line.score.toFixed(2)}
+                      </span>
                     </td>
                     <td className="px-4 py-3">
-                      {line?.pv && (
-                        <div className="overflow-x-auto custom-scrollbar">
-                          <div className="font-mono text-blue-300 flex whitespace-nowrap gap-2">
-                            {line.pv.slice(0, 10).map((move, i) => {
-                              const moveNumber = Math.floor(i / 2) + 1;
-                              return (
-                                <React.Fragment key={i}>
-                                  {i % 2 === 0 && (
-                                    <span className="text-gray-500 select-none">{moveNumber}.</span>
-                                  )}
-                                  <span className={`${i === 0 ? 'font-bold text-white' : ''} hover:bg-blue-900/30 px-1 rounded cursor-default`}>
-                                    {move}
-                                  </span>
-                                </React.Fragment>
-                              );
-                            })}
-                            {line.pv.length > 10 && (
-                              <span className="text-gray-500">...</span>
-                            )}
-                          </div>
+                      <div className="overflow-x-auto custom-scrollbar">
+                        <div className="font-mono text-blue-300 flex whitespace-nowrap gap-2">
+                          {line.moves.slice(0, 15).map((move: string, i: number) => {
+                            const moveNumber = Math.floor(i / 2) + 1;
+                            return (
+                              <React.Fragment key={i}>
+                                {i % 2 === 0 && (
+                                  <span className="text-gray-500 select-none">{moveNumber}.</span>
+                                )}
+                                <span className={`${i === 0 ? 'font-bold text-white' : ''} hover:bg-blue-900/30 px-1 rounded cursor-default`}>
+                                  {move}
+                                </span>
+                              </React.Fragment>
+                            );
+                          })}
+                          {line.moves.length > 15 && (
+                            <span className="text-gray-500">...</span>
+                          )}
                         </div>
-                      )}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -581,7 +552,7 @@ const ChessViewer = forwardRef<ChessViewerHandle, ChessViewerProps>((props, ref)
 
   return (
     <div className="max-w-[1800px] mx-auto">
-      <div className="grid grid-cols-[auto_300px] gap-6 items-start">
+      <div className="flex flex-col gap-6">
         <div className="bg-gray-900 rounded-lg shadow-lg shadow-black/20 p-4 flex justify-center">
           <div className="flex flex-col items-center" style={{ width: boardWidth }}>
             <div className="text-center mb-4 text-white text-xl font-bold">
@@ -678,214 +649,124 @@ const ChessViewer = forwardRef<ChessViewerHandle, ChessViewerProps>((props, ref)
           </div>
         </div>
 
-        <div className="sticky top-24 max-h-[calc(100vh-6rem)] overflow-y-auto">
-          <div className="space-y-6">
-            <div className="bg-gray-900 rounded-lg shadow-lg shadow-black/20 p-4">
-              <h2 className="text-xl font-bold mb-4 text-white">Game Information</h2>
-              {currentGame ? (
-                <div>
-                  <table className="w-full">
-                    <tbody>
-                      <tr>
-                        <td className="py-1 pr-4 font-bold text-blue-300 whitespace-nowrap">White:</td>
-                        <td className="py-1 text-white">{whitePlayer}</td>
-                      </tr>
-                      <tr>
-                        <td className="py-1 pr-4 font-bold text-blue-300 whitespace-nowrap">Black:</td>
-                        <td className="py-1 text-white">{blackPlayer}</td>
-                      </tr>
-                      <tr>
-                        <td className="py-1 pr-4 font-bold text-blue-300 whitespace-nowrap">Event:</td>
-                        <td className="py-1 text-white">{currentGame.headers['Event'] || 'N/A'}</td>
-                      </tr>
-                      <tr>
-                        <td className="py-1 pr-4 font-bold text-blue-300 whitespace-nowrap">Site:</td>
-                        <td className="py-1 text-white">{currentGame.headers['Site'] || 'N/A'}</td>
-                      </tr>
-                      <tr>
-                        <td className="py-1 pr-4 font-bold text-blue-300 whitespace-nowrap">Date:</td>
-                        <td className="py-1 text-white">{currentGame.headers['Date'] || 'N/A'}</td>
-                      </tr>
-                      <tr>
-                        <td className="py-1 pr-4 font-bold text-blue-300 whitespace-nowrap">Round:</td>
-                        <td className="py-1 text-white">{currentGame.headers['Round'] || 'N/A'}</td>
-                      </tr>
-                      <tr>
-                        <td className="py-1 pr-4 font-bold text-blue-300 whitespace-nowrap">Result:</td>
-                        <td className="py-1 font-bold text-green-400">{result}</td>
-                      </tr>
-                      <tr>
-                        <td className="py-1 pr-4 font-bold text-blue-300 whitespace-nowrap">ECO:</td>
-                        <td className="py-1 text-white">{currentGame.headers['ECO'] || 'N/A'}</td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-              ) : (
-                <div className="text-blue-300 text-center">
-                  No game loaded
-                </div>
-              )}
-            </div>
-
-            {currentGame && (
-              <div className="bg-gray-900 rounded-lg shadow-lg shadow-black/20 p-4">
-                <h2 className="text-xl font-bold mb-4 text-white">Moves</h2>
-                <div className="space-y-2">
-                  {getPairedMoves(currentGame.moves).map(([white, black], index) => (
-                    <div 
-                      key={index}
-                      className="flex gap-4 text-base"
-                    >
-                      <span className="w-8 text-gray-500 select-none">{index + 1}.</span>
-                      <div className="flex-1 grid grid-cols-2 gap-2">
-                        <button
-                          onClick={() => goToMove(index * 2)}
-                          className={`text-left px-2 py-1 rounded ${
-                            currentMoveIndex === index * 2
-                              ? 'bg-blue-900/50 text-blue-300'
-                              : 'text-white hover:bg-gray-800'
-                          }`}
-                        >
-                          {white}
-                        </button>
-                        {black && (
-                          <button
-                            onClick={() => goToMove(index * 2 + 1)}
-                            className={`text-left px-2 py-1 rounded ${
-                              currentMoveIndex === index * 2 + 1
-                                ? 'bg-blue-900/50 text-blue-300'
-                                : 'text-white hover:bg-gray-800'
-                            }`}
-                          >
-                            {black}
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
+        {/* Game Information Panel */}
+        {currentGame && (
+          <div className="bg-gray-900 rounded-lg shadow-lg shadow-black/20 p-4">
+            <h3 className="text-white font-bold mb-3">Game Information</h3>
+            <div className="space-y-2 text-sm">
+              <div className="grid grid-cols-[auto_1fr] gap-x-3 text-gray-300">
+                <span className="text-gray-400">White:</span>
+                <span>{whitePlayer}</span>
+                <span className="text-gray-400">Black:</span>
+                <span>{blackPlayer}</span>
+                <span className="text-gray-400">Event:</span>
+                <span>{currentGame.headers['Event'] || 'N/A'}</span>
+                <span className="text-gray-400">Site:</span>
+                <span>{currentGame.headers['Site'] || 'N/A'}</span>
+                <span className="text-gray-400">Date:</span>
+                <span>{currentGame.headers['Date'] || 'N/A'}</span>
+                <span className="text-gray-400">Result:</span>
+                <span>{result}</span>
               </div>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {games.length > 0 && (
-        <div className="bg-gray-900 rounded-lg shadow-lg shadow-black/20 p-6 mt-8">
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-xl font-bold text-gray-200">Games ({filteredGames.length})</h2>
-              <button
-                onClick={() => {
-                  setSearchQuery('');
-                  setActiveFilters({
-                    result: '',
-                    date: '',
-                    minMoves: null,
-                    maxMoves: null
-                  });
-                }}
-                className="text-sm text-blue-400 hover:text-blue-300"
-              >
-                Clear filters
-              </button>
             </div>
+          </div>
+        )}
 
-            <div className="bg-gray-700/50 rounded-lg p-4 border border-gray-600">
-              <div className="flex flex-wrap items-center gap-4">
+        {/* Moves List Panel */}
+        {currentGame && (
+          <div className="bg-gray-900 rounded-lg shadow-lg shadow-black/20 p-4">
+            <h3 className="text-white font-bold mb-3">Moves</h3>
+            <div className="space-y-1">
+              {getPairedMoves(currentGame.moves).map(([whiteMove, blackMove], index) => (
+                <div 
+                  key={index}
+                  className="flex text-sm font-mono"
+                >
+                  <span className="w-8 text-gray-500">{index + 1}.</span>
+                  <button
+                    className={`px-2 ${currentMoveIndex === index * 2 ? 'bg-blue-500 text-white' : 'text-blue-300 hover:bg-gray-800'} rounded`}
+                    onClick={() => goToMove(index * 2)}
+                  >
+                    {whiteMove}
+                  </button>
+                  {blackMove && (
+                    <button
+                      className={`px-2 ml-2 ${currentMoveIndex === index * 2 + 1 ? 'bg-blue-500 text-white' : 'text-blue-300 hover:bg-gray-800'} rounded`}
+                      onClick={() => goToMove(index * 2 + 1)}
+                    >
+                      {blackMove}
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Games List Panel with Filters */}
+        {games.length > 1 && (
+          <div className="bg-gray-900 rounded-lg shadow-lg shadow-black/20 p-4">
+            <h3 className="text-white font-bold mb-3">Games</h3>
+            
+            {/* Search and Filters */}
+            <div className="grid grid-cols-2 gap-4 mb-4">
+              <div>
                 <input
                   type="text"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Search..."
-                  className="w-48 px-3 py-1.5 bg-gray-700 border border-gray-600 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 text-gray-200 text-sm placeholder-gray-400"
+                  placeholder="Search games..."
+                  className="w-full bg-gray-800 text-gray-200 px-3 py-2 rounded border border-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-500"
                 />
-
+              </div>
+              <div className="grid grid-cols-2 gap-2">
                 <select
                   value={activeFilters.result}
                   onChange={(e) => setActiveFilters(prev => ({ ...prev, result: e.target.value }))}
-                  className="w-32 px-3 py-1.5 bg-gray-700 border border-gray-600 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 text-gray-200 text-sm"
+                  className="bg-gray-800 text-gray-200 px-3 py-2 rounded border border-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-500"
                 >
                   <option value="">All Results</option>
-                  <option value="1-0">White wins</option>
-                  <option value="0-1">Black wins</option>
+                  <option value="1-0">White Wins</option>
+                  <option value="0-1">Black Wins</option>
                   <option value="1/2-1/2">Draw</option>
                 </select>
-
                 <input
                   type="text"
                   value={activeFilters.date}
                   onChange={(e) => setActiveFilters(prev => ({ ...prev, date: e.target.value }))}
-                  placeholder="Date (YYYY.MM.DD)"
-                  className="w-36 px-3 py-1.5 bg-gray-700 border border-gray-600 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 text-gray-200 text-sm placeholder-gray-400"
+                  placeholder="Filter by year..."
+                  className="bg-gray-800 text-gray-200 px-3 py-2 rounded border border-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-500"
                 />
-
-                <div className="flex items-center gap-2">
-                  <input
-                    type="number"
-                    value={activeFilters.minMoves || ''}
-                    onChange={(e) => setActiveFilters(prev => ({ 
-                      ...prev, 
-                      minMoves: e.target.value ? parseInt(e.target.value) : null 
-                    }))}
-                    placeholder="Min"
-                    className="w-20 px-3 py-1.5 bg-gray-700 border border-gray-600 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 text-gray-200 text-sm placeholder-gray-400"
-                  />
-                  <span className="text-gray-400">-</span>
-                  <input
-                    type="number"
-                    value={activeFilters.maxMoves || ''}
-                    onChange={(e) => setActiveFilters(prev => ({ 
-                      ...prev, 
-                      maxMoves: e.target.value ? parseInt(e.target.value) : null 
-                    }))}
-                    placeholder="Max"
-                    className="w-20 px-3 py-1.5 bg-gray-700 border border-gray-600 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 text-gray-200 text-sm placeholder-gray-400"
-                  />
-                </div>
               </div>
             </div>
-          </div>
 
-          <div className="mt-6 overflow-x-auto">
-            <table className="w-full border-collapse border border-gray-700 rounded-lg overflow-hidden">
-              <thead>
-                <tr className="bg-gray-700/50">
-                  <th className="px-4 py-2 text-left font-bold text-gray-200 border-b border-r border-gray-600">White</th>
-                  <th className="px-4 py-2 text-left font-bold text-gray-200 border-b border-r border-gray-600">Black</th>
-                  <th className="px-4 py-2 text-left font-bold text-gray-200 border-b border-r border-gray-600">Event</th>
-                  <th className="px-4 py-2 text-left font-bold text-gray-200 border-b border-r border-gray-600">Date</th>
-                  <th className="px-4 py-2 text-left font-bold text-gray-200 border-b border-r border-gray-600">Site</th>
-                  <th className="px-4 py-2 text-left font-bold text-gray-200 border-b border-r border-gray-600">Round</th>
-                  <th className="px-4 py-2 text-left font-bold text-gray-200 border-b border-r border-gray-600">Result</th>
-                  <th className="px-4 py-2 text-left font-bold text-gray-200 border-b border-r border-gray-600">Moves</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredGames.map((game, index) => (
-                  <tr 
-                    key={index} 
-                    onClick={() => loadGame(games.findIndex(g => g.pgn === game.pgn))}
-                    className={`border-b border-gray-700 cursor-pointer ${
-                      games[currentGameIndex]?.pgn === game.pgn ? 'bg-blue-900/30' : 'hover:bg-gray-700/30'
-                    }`}
-                  >
-                    <td className="px-4 py-2 font-bold text-gray-300 border-r border-gray-600">{game.headers['White'] || 'White'}</td>
-                    <td className="px-4 py-2 font-bold text-gray-300 border-r border-gray-600">{game.headers['Black'] || 'Black'}</td>
-                    <td className="px-4 py-2 text-gray-400 border-r border-gray-600">{game.headers['Event'] || 'N/A'}</td>
-                    <td className="px-4 py-2 text-gray-400 border-r border-gray-600">{game.headers['Date'] || 'N/A'}</td>
-                    <td className="px-4 py-2 text-gray-400 border-r border-gray-600">{game.headers['Site'] || 'N/A'}</td>
-                    <td className="px-4 py-2 text-gray-400 border-r border-gray-600">{game.headers['Round'] || 'N/A'}</td>
-                    <td className="px-4 py-2 font-bold text-blue-400 border-r border-gray-600">{game.headers['Result'] || 'N/A'}</td>
-                    <td className="px-4 py-2 text-gray-400">{game.moves.length}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            {/* Games List */}
+            <div className="grid grid-cols-2 gap-2">
+              {filteredGames.map((game, index) => (
+                <button
+                  key={index}
+                  onClick={() => loadGame(index)}
+                  className={`text-left p-2 rounded ${
+                    index === currentGameIndex ? 'bg-blue-500 text-white' : 'text-gray-300 hover:bg-gray-800'
+                  }`}
+                >
+                  <div className="text-sm">
+                    <div className="font-semibold">
+                      {game.headers['White']} vs {game.headers['Black']}
+                    </div>
+                    <div className="text-xs opacity-75">
+                      {game.headers['Event']} • {game.headers['Date']}
+                    </div>
+                    <div className="text-xs opacity-75">
+                      Result: {game.headers['Result']}
+                    </div>
+                  </div>
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 });
