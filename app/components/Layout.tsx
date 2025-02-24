@@ -6,9 +6,10 @@ interface LayoutProps {
   onFileUpload?: (file: File) => void;
   onPastePGN?: () => void;
   onPasteFEN?: () => void;
+  onAddBoard?: () => void;
 }
 
-export default function Layout({ children, onFileUpload, onPastePGN, onPasteFEN }: LayoutProps) {
+export default function Layout({ children, onFileUpload, onPastePGN, onPasteFEN, onAddBoard }: LayoutProps) {
   const [isSidebarExpanded, setIsSidebarExpanded] = useState(false);
   const [showFileMenu, setShowFileMenu] = useState(false);
   const [showEditMenu, setShowEditMenu] = useState(false);
@@ -87,6 +88,17 @@ export default function Layout({ children, onFileUpload, onPastePGN, onPasteFEN 
                 className="w-full px-4 py-2 text-left hover:bg-[#383852] flex items-center gap-2"
               >
                 <span>📁</span> Open PGN
+              </button>
+              <button 
+                onClick={() => {
+                  if (onAddBoard) {
+                    onAddBoard();
+                    handleMenuMouseLeave();
+                  }
+                }}
+                className="w-full px-4 py-2 text-left hover:bg-[#383852] flex items-center gap-2"
+              >
+                <span>➕</span> Add Board
               </button>
             </div>
           )}
@@ -239,21 +251,6 @@ export default function Layout({ children, onFileUpload, onPastePGN, onPasteFEN 
 
       {/* Main Content Area */}
       <div className={`pt-8 transition-all duration-300 ${isSidebarExpanded ? 'pl-64' : 'pl-16'}`}>
-        {/* Content Header */}
-        <div className="h-12 px-4 flex items-center justify-between bg-[#1E1E2E] border-b border-[#383852]">
-          <div className="flex items-center">
-            <h1 className="text-xl text-white font-semibold">Chess Analysis</h1>
-          </div>
-          <div className="flex items-center gap-2">
-            <button className="px-4 py-1.5 bg-[#4CAF50] text-white rounded-lg text-sm hover:bg-[#45a049]">
-              Start Engine
-            </button>
-            <button className="px-4 py-1.5 bg-[#6B8AFF] text-white rounded-lg text-sm hover:bg-[#5470cc]">
-              Analyze
-            </button>
-          </div>
-        </div>
-
         {/* Main Content */}
         <main className="p-4">
           {children}
